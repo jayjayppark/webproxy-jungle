@@ -93,13 +93,20 @@ void doit(int fd)
 void echo(int connfd)
 {
 size_t n;
-char buf[MAXLINE];
+char buf[MAXLINE], full[MAXLINE];
 rio_t rio;
+strcpy(full, "");
 Rio_readinitb(&rio, connfd);
  while((n = Rio_readlineb(&rio, buf, MAXLINE)) != 0) {
- printf("server received %d bytes\n", (int)n);
- Rio_writen(connfd, buf, n);
+  strcat(full, buf);
  }
+sprintf(buf, "HTTP/1.0 200 OK\r\n");
+sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
+sprintf(buf, "%sConnection: close\r\n", buf);
+sprintf(buf, "%sContent-length: %d\r\n", buf, strlen(full));
+sprintf(buf, "%sContent-type: text/plain\r\n\r\n", buf);
+Rio_writen(connfd, buf, strlen(buf));
+Rio_writen(connfd, full, strlen(full));
  }
 
 void clienterror(int fd, char *cause, char *errnum,
