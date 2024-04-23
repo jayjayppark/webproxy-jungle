@@ -8,38 +8,45 @@ void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs, char *method);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
-void sigchld_handler(int sig);
+void *thread(void *vargp);
 
 static const char *user_agent_hdr =
     "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 "
     "Firefox/10.0.3\r\n";
+    
 int main(int argc, char **argv) {
-  int listenfd, connfd;
+  int listenfd, *connfdp;
   char hostname[MAXLINE], port[MAXLINE];
   socklen_t clientlen;
   struct sockaddr_storage clientaddr;
+  pthread_t tid;
   /* Check command-line args */
   if (argc != 2) {
   fprintf(stderr, "usage: %s <port>\n", argv[0]);
   exit(1);
   }
-  Signal(SIGCHLD, sigchld_handler);
   listenfd = Open_listenfd(argv[1]);
   while (1) {
   clientlen = sizeof(clientaddr);
-  connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
+  connfdp = Malloc(sizeof(int));
+  *connfdp = Accept(listenfd, (SA *)&clientaddr, &clientlen);
   Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE,
   port, MAXLINE, 0);
   printf("Accepted connection from (%s, %s)\n", hostname, port);
-  if (Fork() == 0) {
-    Close(listenfd);
-    doit(connfd);
-    Close(connfd);
-    exit(0);
-  }
-  Close(connfd);
+  Pthread_create(&tid, NULL, thread, connfdp);
   }
 }
+
+void *thread(void *vargp)
+{
+  int connfd = *((int *)vargp);
+  Pthread_detach(pthread_self());
+  Free(vargp);
+  doit(connfd);
+  Close(connfd);
+  return NULL;
+}
+
 void doit(int serverfd)
 {
   int is_static, clientfd, content_length;
@@ -230,11 +237,4 @@ int parse_uri(char *uri, char *hostname, char *port, char *path) {
     }
   }
   return 1;
-}
-
-void sigchld_handler(int sig)
-{
-  while (waitpid(-1, 0, WNOHANG) > 0)
-    ;
-  return;
 }
