@@ -1,18 +1,26 @@
+/* $begin tinymain */
+/*
+ * tiny.c - A simple, iterative HTTP/1.0 Web server that uses the
+ *     GET method to serve static and dynamic content.
+ *
+ * Updated 11/2019 droh
+ *   - Fixed sprintf() aliasing issue in serve_static(), and clienterror().
+ */
 #include "csapp.h"
 #include <stdio.h>
 void doit(int fd);
 void read_requesthdrs(int clientfd, rio_t *rio_server, void *request_buf, char *hostname, char *port);
-int parse_uri(char *uri, char *hostname, char *port, char *path);
+void parse_uri(char *uri, char *hostname, char *port, char *path);
 void serve_static(int fd, char *filename, int filesize, char *method);
 void get_filetype(char *filename, char *filetype);
 void serve_dynamic(int fd, char *filename, char *cgiargs, char *method);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
-void sigchld_handler(int sig);
 
 static const char *user_agent_hdr =
     "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 "
     "Firefox/10.0.3\r\n";
+
 int main(int argc, char **argv) {
   int listenfd, connfd;
   char hostname[MAXLINE], port[MAXLINE];
@@ -23,7 +31,6 @@ int main(int argc, char **argv) {
   fprintf(stderr, "usage: %s <port>\n", argv[0]);
   exit(1);
   }
-  Signal(SIGCHLD, sigchld_handler);
   listenfd = Open_listenfd(argv[1]);
   while (1) {
   clientlen = sizeof(clientaddr);
@@ -31,15 +38,11 @@ int main(int argc, char **argv) {
   Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE,
   port, MAXLINE, 0);
   printf("Accepted connection from (%s, %s)\n", hostname, port);
-  if (Fork() == 0) {
-    Close(listenfd);
-    doit(connfd);
-    Close(connfd);
-    exit(0);
-  }
+  doit(connfd);
   Close(connfd);
   }
 }
+
 void doit(int serverfd)
 {
   int is_static, clientfd, content_length;
@@ -58,54 +61,40 @@ void doit(int serverfd)
   "Tiny does not implement this method");
   return;
   }
-  /* Check if the request is for favicon.ico and ignore it */
-  if (strstr(uri, "favicon.ico")) {
-      printf("Ignoring favicon.ico request\n");
-      return;  // Just return without sending any response
-  }
-  // Parse URI from GET request
-  if (!parse_uri(uri, hostname, port, path)) {
-      clienterror(serverfd, uri, "400", "Bad Request", "Proxy received a malformed request");
-      return;
-  }
+  parse_uri(uri, hostname, port, path);
   printf("!!!!!!! %s %s %s !!!!!!\n", hostname, port, path);
   sprintf(request_buf, "%s %s %s\r\n", method, path, "HTTP/1.0");
   clientfd = Open_clientfd(hostname, port);
-  if (clientfd < 0) {
-        fprintf(stderr, "Connection to %s on port %s failed.\n", hostname, port);
-        clienterror(serverfd, "Connection Failed", "5-3", "Service Unavailable", "The proxy server could not retrieve the resource.");
-        return;
-  }
   Rio_writen(clientfd, request_buf, strlen(request_buf));
-  printf("i will read request\n");
   read_requesthdrs(clientfd, &rio_server, request_buf, hostname, port);
-  printf("reding request\n");
+
   Rio_readinitb(&rio_client, clientfd);
+
   while (strcmp(response_buf, "\r\n"))
   {
     Rio_readlineb(&rio_client, response_buf, MAXLINE);
     if (strstr(response_buf, "Content-length")) // Response Body 수신에 사용하기 위해 Content-length 저장
       content_length = atoi(strchr(response_buf, ':') + 1);
-    Rio_writen(serverfd, response_buf, strlen(response_buf));
+    Rio_writen(clientfd, response_buf, strlen(response_buf));
   }
-  printf("send p to s\n");
-  /* :넷: Response Body 읽기 & 전송 [Server -> Proxy -> Client] */
-  char saver[MAXLINE];
-  ssize_t n;
-  ssize_t size = 0;
-  while((n = Rio_readnb(&rio_client, saver, MAXLINE)) > 0)
-  {
-    Rio_writen(serverfd, saver, n);
-    size += n;
-  }
-  printf("responded byted : %d\n", n);
+
+  /* 4️⃣ Response Body 읽기 & 전송 [💻 Server -> 🚒 Proxy -> 🙋‍♀️ Client] */
+  char *response_ptr = malloc(content_length);
+  Rio_readnb(&rio_server, response_ptr, content_length);
+  Rio_writen(clientfd, response_ptr, content_length); // Client에 Response Body 전송
+  free(response_ptr); // 캐싱하지 않은 경우만 메모리 반환
+
+  Close(serverfd);
+
 }
+
 void read_requesthdrs(int clientfd, rio_t *rio_server, void *request_buf, char *hostname, char *port)
     {
       int is_host_exist;
       int is_connection_exist;
       int is_proxy_connection_exist;
       int is_user_agent_exist;
+
       Rio_readlineb(rio_server, request_buf, MAXLINE); // 첫번째 줄 읽기
       while (strcmp(request_buf, "\r\n"))
       {
@@ -128,9 +117,11 @@ void read_requesthdrs(int clientfd, rio_t *rio_server, void *request_buf, char *
         {
           is_host_exist = 1;
         }
+
         Rio_writen(clientfd, request_buf, strlen(request_buf)); // Server에 전송
         Rio_readlineb(rio_server, request_buf, MAXLINE);       // 다음 줄 읽기
       }
+
       // 필수 헤더 미포함 시 추가로 전송
       if (!is_proxy_connection_exist)
       {
@@ -152,15 +143,18 @@ void read_requesthdrs(int clientfd, rio_t *rio_server, void *request_buf, char *
         sprintf(request_buf, user_agent_hdr);
         Rio_writen(clientfd, request_buf, strlen(request_buf));
       }
+
       sprintf(request_buf, "\r\n"); // 종료문
       Rio_writen(clientfd, request_buf, strlen(request_buf));
       return;
     }
+
 void read_responsehdrs(int serverfd, rio_t *rio_client)
 {
   char buf[MAXLINE];
   char *ptr;
   int content_length = 0;
+
   Rio_readlineb(rio_client, buf, MAXLINE);
   while(strcmp(buf, "\r\n")) {
     if (ptr = strstr(buf, "Content-length:")) {
@@ -176,6 +170,9 @@ void read_responsehdrs(int serverfd, rio_t *rio_client)
   Rio_writen(serverfd, buf, strlen(buf));
   return content_length;
 }
+
+
+
 void clienterror(int fd, char *cause, char *errnum,
 char *shortmsg, char *longmsg)
 {
@@ -186,6 +183,7 @@ sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body);
 sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
  sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
  sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
+
  /* Print the HTTP response */
  sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
  Rio_writen(fd, buf, strlen(buf));
@@ -195,20 +193,25 @@ sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
  Rio_writen(fd, buf, strlen(buf));
  Rio_writen(fd, body, strlen(body));
 }
-int parse_uri(char *uri, char *hostname, char *port, char *path) {
-  if (uri == NULL) return 0;
+
+
+void parse_uri(char *uri, char *hostname, char *port, char *path) {
   char *ptr = NULL;
   path[0] = '/';
   path[1] = '\0';
   strcpy(port, "80");
+  
   if (uri[0] == '/') uri = uri + 1;
+  
   ptr = strstr(uri, "//");
   if (ptr) uri = ptr + 2;
+  
   ptr = strchr(uri, ':');
   if (ptr) {
     *ptr = '\0';
     strcpy(hostname, uri);
     uri = ptr + 1;
+    
     ptr = strchr(uri, '/');
     if (ptr) {
       *ptr = '\0';
@@ -229,12 +232,4 @@ int parse_uri(char *uri, char *hostname, char *port, char *path) {
       strcpy(hostname, uri);
     }
   }
-  return 1;
-}
-
-void sigchld_handler(int sig)
-{
-  while (waitpid(-1, 0, WNOHANG) > 0)
-    ;
-  return;
 }
