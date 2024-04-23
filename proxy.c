@@ -1,6 +1,17 @@
-#include "csapp.h"
 #include <stdio.h>
-void doit(int fd);
+#include <pthread.h>
+#include "csapp.h"
+/* Recommended max cache and object sizes */
+#define MAX_CACHE_SIZE 1049000
+#define MAX_OBJECT_SIZE 102400
+
+/* You won't lose style points for including this long line in your code */
+static const char *user_agent_hdr =
+    "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 "
+    "Firefox/10.0.3\r\n";
+
+
+void doit(int fd);  
 void read_requesthdrs(int clientfd, rio_t *rio_server, void *request_buf, char *hostname, char *port);
 int parse_uri(char *uri, char *hostname, char *port, char *path);
 void serve_static(int fd, char *filename, int filesize, char *method);
@@ -10,9 +21,6 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
 void *thread(void *vargp);
 
-static const char *user_agent_hdr =
-    "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 "
-    "Firefox/10.0.3\r\n";
     
 int main(int argc, char **argv) {
   int listenfd, *connfdp;
@@ -84,9 +92,9 @@ void doit(int serverfd)
         return;
   }
   Rio_writen(clientfd, request_buf, strlen(request_buf));
-  printf("i will read request\n");
+  printf("I will read request and write\n");
   read_requesthdrs(clientfd, &rio_server, request_buf, hostname, port);
-  printf("reding request\n");
+  printf("reading request end\n");
   Rio_readinitb(&rio_client, clientfd);
   while (strcmp(response_buf, "\r\n"))
   {
